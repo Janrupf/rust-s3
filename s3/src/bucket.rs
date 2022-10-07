@@ -2500,8 +2500,6 @@ mod test {
     async fn streaming_test_put_get_delete_big_object(bucket: Bucket) {
         #[cfg(feature = "with-async-std")]
         use async_std::stream::StreamExt;
-        #[cfg(feature = "with-tokio")]
-        use futures::StreamExt;
 
         use std::fs::File;
         use std::io::Write;

@@ -186,8 +186,8 @@ pub struct GetObjectStream {
 
 impl GetObjectStream {
     pub(crate) fn new<R: 'static>(length: Option<usize>, reader: R) -> Self
-    where
-        R: AsyncRead + Send,
+        where
+            R: AsyncRead + Send,
     {
         Self {
             length,
@@ -217,7 +217,7 @@ impl Stream for GetObjectStream {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, self.length)
+        (self.length.unwrap_or(0), self.length)
     }
 }
 

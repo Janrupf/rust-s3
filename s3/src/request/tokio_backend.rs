@@ -160,9 +160,10 @@ impl<'a> Request for Reqwest<'a> {
     async fn response_data_to_stream(&self) -> Result<(Self::ResponseStream, u16), S3Error> {
         let response = self.response().await?;
         let status_code = response.status();
+        let length = response.content_length().map(|v| v as usize);
         let stream = response.bytes_stream();
 
-        Ok((GetObjectStream::new(stream), status_code.as_u16()))
+        Ok((GetObjectStream::new(length, stream), status_code.as_u16()))
     }
 }
 
@@ -184,15 +185,17 @@ impl<'a> Reqwest<'a> {
 }
 
 pub struct GetObjectStream {
-    inner: Pin<Box<dyn Stream<Item = Result<Bytes, reqwest::Error>>>>,
+    size: Option<usize>,
+    inner: Pin<Box<dyn Stream<Item=Result<Bytes, reqwest::Error>>>>,
 }
 
 impl GetObjectStream {
-    pub(crate) fn new<S: 'static>(stream: S) -> Self
-    where
-        S: Stream<Item = Result<Bytes, reqwest::Error>>,
+    pub(crate) fn new<S: 'static>(size: Option<usize>, stream: S) -> Self
+        where
+            S: Stream<Item=Result<Bytes, reqwest::Error>>,
     {
         Self {
+            size,
             inner: Box::pin(stream),
         }
     }
@@ -209,7 +212,11 @@ impl Stream for GetObjectStream {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
+        if let Some(size) = self.size {
+            (size, Some(size))
+        } else {
+            self.inner.size_hint()
+        }
     }
 }
 
@@ -308,7 +315,7 @@ mod tests {
                 end: None,
             },
         )
-        .unwrap();
+            .unwrap();
         let headers = request.headers().unwrap();
         let range = headers.get(RANGE).unwrap();
         assert_eq!(range, "bytes=0-");
@@ -321,7 +328,7 @@ mod tests {
                 end: Some(1),
             },
         )
-        .unwrap();
+            .unwrap();
         let headers = request.headers().unwrap();
         let range = headers.get(RANGE).unwrap();
         assert_eq!(range, "bytes=0-1");
