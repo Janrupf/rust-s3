@@ -40,6 +40,12 @@ use tokio_stream::Stream;
 #[cfg(feature = "with-async-std")]
 use futures_util::Stream;
 
+#[cfg(feature = "with-tokio")]
+use tokio::io::AsyncRead;
+
+#[cfg(feature = "with-async-std")]
+use futures::io::AsyncRead;
+
 use crate::error::S3Error;
 use crate::request::Request;
 use crate::serde_types::{
@@ -936,7 +942,7 @@ impl Bucket {
     /// # }
     /// ```
     #[maybe_async::async_impl]
-    pub async fn put_object_stream<R: Read + Unpin>(
+    pub async fn put_object_stream<R: AsyncRead + Unpin>(
         &self,
         reader: &mut R,
         s3_path: impl AsRef<str>,
@@ -1007,7 +1013,7 @@ impl Bucket {
     /// # }
     /// ```
     #[maybe_async::async_impl]
-    pub async fn put_object_stream_with_content_type<R: Read + Unpin>(
+    pub async fn put_object_stream_with_content_type<R: AsyncRead + Unpin>(
         &self,
         reader: &mut R,
         s3_path: impl AsRef<str>,
@@ -1046,7 +1052,7 @@ impl Bucket {
     }
 
     #[maybe_async::async_impl]
-    async fn _put_object_stream_with_content_type<R: Read + Unpin>(
+    async fn _put_object_stream_with_content_type<R: AsyncRead + Unpin>(
         &self,
         reader: &mut R,
         s3_path: &str,
@@ -1054,7 +1060,7 @@ impl Bucket {
     ) -> Result<u16, S3Error> {
         // If the file is smaller CHUNK_SIZE, just do a regular upload.
         // Otherwise perform a multi-part upload.
-        let first_chunk = crate::utils::read_chunk(reader)?;
+        let first_chunk = crate::utils::read_chunk_async(reader).await?;
         if first_chunk.len() < CHUNK_SIZE {
             let response_data = self
                 .put_object_with_content_type(s3_path, first_chunk.as_slice(), content_type)
@@ -1080,7 +1086,7 @@ impl Bucket {
             let chunk = if part_number == 0 {
                 first_chunk.clone()
             } else {
-                crate::utils::read_chunk(reader)?
+                crate::utils::read_chunk_async(reader).await?
             };
 
             let done = chunk.len() < CHUNK_SIZE;
