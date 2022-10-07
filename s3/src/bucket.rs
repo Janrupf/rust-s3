@@ -11,8 +11,7 @@ use crate::command::{Command, Multipart};
 use crate::creds::Credentials;
 use crate::region::Region;
 use crate::request::ResponseData;
-#[cfg(any(feature = "with-tokio", feature = "with-async-std"))]
-use crate::request::ResponseDataStream;
+
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
@@ -31,6 +30,15 @@ use tokio::io::AsyncWrite;
 #[cfg(feature = "sync")]
 use crate::request::blocking::AttoRequest as RequestImpl;
 use std::io::Read;
+
+#[cfg(any(feature = "with-async-std", feature = "with-tokio"))]
+use bytes::Bytes;
+
+#[cfg(feature = "with-tokio")]
+use tokio_stream::Stream;
+
+#[cfg(feature = "with-async-std")]
+use futures_util::Stream;
 
 use crate::error::S3Error;
 use crate::request::Request;
@@ -107,8 +115,8 @@ fn validate_expiry(expiry_secs: u32) -> Result<(), S3Error> {
 
 #[cfg_attr(all(feature = "with-tokio", feature = "blocking"), block_on("tokio"))]
 #[cfg_attr(
-    all(feature = "with-async-std", feature = "blocking"),
-    block_on("async-std")
+all(feature = "with-async-std", feature = "blocking"),
+block_on("async-std")
 )]
 impl Bucket {
     /// Get a presigned url for getting object on a given path
@@ -801,22 +809,22 @@ impl Bucket {
     /// let mut async_output_file = async_std::fs::File::create("async_output_file").await.expect("Unable to create file");
     ///
     /// // Async variant with `tokio` or `async-std` features
-    /// let status_code = bucket.get_object_to_writer("/test.file", &mut async_output_file).await?;
+    /// let status_code = bucket.get_object_stream("/test.file", &mut async_output_file).await?;
     ///
     /// // `sync` feature will produce an identical method
     /// #[cfg(feature = "sync")]
-    /// let status_code = bucket.get_object_to_writer("/test.file", &mut output_file)?;
+    /// let status_code = bucket.get_object_stream("/test.file", &mut output_file)?;
     ///
     /// // Blocking variant, generated with `blocking` feature in combination
     /// // with `tokio` or `async-std` features. Based of the async branch
     /// #[cfg(feature = "blocking")]
-    /// let status_code = bucket.get_object_to_writer_blocking("/test.file", &mut async_output_file)?;
+    /// let status_code = bucket.get_object_stream_blocking("/test.file", &mut async_output_file)?;
     /// #
     /// # Ok(())
     /// # }
     /// ```
     #[maybe_async::async_impl]
-    pub async fn get_object_to_writer<T: AsyncWrite + Send + Unpin, S: AsRef<str>>(
+    pub async fn get_object_stream<T: AsyncWrite + Send + Unpin, S: AsRef<str>>(
         &self,
         path: S,
         writer: &mut T,
@@ -827,7 +835,7 @@ impl Bucket {
     }
 
     #[maybe_async::sync_impl]
-    pub fn get_object_to_writer<T: std::io::Write + Send, S: AsRef<str>>(
+    pub fn get_object_stream<T: std::io::Write + Send, S: AsRef<str>>(
         &self,
         path: S,
         writer: &mut T,
@@ -850,7 +858,7 @@ impl Bucket {
     /// #[cfg(feature = "with-tokio")]
     /// use tokio::io::AsyncWriteExt;
     /// #[cfg(feature = "with-async-std")]
-    /// use futures_util::StreamExt;
+    /// use futures_util::TryStreamExt;
     /// #[cfg(feature = "with-async-std")]
     /// use futures_util::AsyncWriteExt;
     ///
@@ -863,14 +871,14 @@ impl Bucket {
     /// let bucket = Bucket::new(bucket_name, region, credentials)?;
     /// let path = "path";
     ///
-    /// let mut response_data_stream = bucket.get_object_stream(path).await?;
+    /// let (mut stream, status_code) = bucket.get_object_async_stream(path).await?;
     ///
     /// #[cfg(feature = "with-tokio")]
     /// let mut async_output_file = tokio::fs::File::create("async_output_file").await.expect("Unable to create file");
     /// #[cfg(feature = "with-async-std")]
     /// let mut async_output_file = async_std::fs::File::create("async_output_file").await.expect("Unable to create file");
     ///
-    /// while let Some(chunk) = response_data_stream.bytes().next().await {
+    /// while let Some(chunk) = stream.try_next().await? {
     ///     async_output_file.write_all(&chunk).await?;
     /// }
     ///
@@ -879,10 +887,10 @@ impl Bucket {
     /// # }
     /// ```
     #[cfg(any(feature = "with-tokio", feature = "with-async-std"))]
-    pub async fn get_object_stream<S: AsRef<str>>(
+    pub async fn get_object_async_stream<S: AsRef<str>>(
         &self,
         path: S,
-    ) -> Result<ResponseDataStream, S3Error> {
+    ) -> Result<(impl Stream<Item=Result<Bytes, S3Error>>, u16), S3Error> {
         let command = Command::GetObject;
         let request = RequestImpl::new(self, path.as_ref(), command)?;
         request.response_data_to_stream().await
@@ -938,7 +946,7 @@ impl Bucket {
             s3_path.as_ref(),
             "application/octet-stream",
         )
-        .await
+            .await
     }
 
     #[maybe_async::sync_impl]
@@ -2191,7 +2199,6 @@ impl Bucket {
 
 #[cfg(test)]
 mod test {
-
     use crate::creds::Credentials;
     use crate::region::Region;
     use crate::Bucket;
@@ -2214,7 +2221,7 @@ mod test {
             None,
             None,
         )
-        .unwrap()
+            .unwrap()
     }
 
     fn test_gc_credentials() -> Credentials {
@@ -2225,7 +2232,7 @@ mod test {
             None,
             None,
         )
-        .unwrap()
+            .unwrap()
     }
 
     fn test_wasabi_credentials() -> Credentials {
@@ -2236,7 +2243,7 @@ mod test {
             None,
             None,
         )
-        .unwrap()
+            .unwrap()
     }
 
     fn test_minio_credentials() -> Credentials {
@@ -2251,7 +2258,7 @@ mod test {
             None,
             None,
         )
-        .unwrap()
+            .unwrap()
     }
 
     fn test_r2_credentials() -> Credentials {
@@ -2262,7 +2269,7 @@ mod test {
             None,
             None,
         )
-        .unwrap()
+            .unwrap()
     }
 
     fn test_aws_bucket() -> Bucket {
@@ -2271,7 +2278,7 @@ mod test {
             "eu-central-1".parse().unwrap(),
             test_aws_credentials(),
         )
-        .unwrap()
+            .unwrap()
     }
 
     fn test_wasabi_bucket() -> Bucket {
@@ -2280,7 +2287,7 @@ mod test {
             "wa-eu-central-1".parse().unwrap(),
             test_wasabi_credentials(),
         )
-        .unwrap()
+            .unwrap()
     }
 
     fn test_gc_bucket() -> Bucket {
@@ -2292,7 +2299,7 @@ mod test {
             },
             test_gc_credentials(),
         )
-        .unwrap();
+            .unwrap();
         bucket.set_listobjects_v1();
         bucket
     }
@@ -2306,8 +2313,8 @@ mod test {
             },
             test_minio_credentials(),
         )
-        .unwrap()
-        .with_path_style()
+            .unwrap()
+            .with_path_style()
     }
 
     fn test_digital_ocean_bucket() -> Bucket {
@@ -2322,7 +2329,7 @@ mod test {
             },
             test_r2_credentials(),
         )
-        .unwrap()
+            .unwrap()
     }
 
     fn object(size: u32) -> Vec<u8> {
@@ -2363,12 +2370,12 @@ mod test {
     #[ignore]
     #[cfg(feature = "tags")]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn test_tagging_aws() {
         let bucket = test_aws_bucket();
@@ -2404,12 +2411,12 @@ mod test {
     #[ignore]
     #[cfg(feature = "tags")]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn test_tagging_minio() {
         let bucket = test_minio_bucket();
@@ -2444,12 +2451,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn streaming_big_aws_put_head_get_delete_object() {
         streaming_test_put_get_delete_big_object(test_aws_bucket()).await;
@@ -2457,19 +2464,19 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(
-            all(
-                not(feature = "sync"),
-                not(feature = "tokio-rustls-tls"),
-                feature = "with-tokio"
-            ),
-            tokio::test
-        ),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(
+    all(
+    not(feature = "sync"),
+    not(feature = "tokio-rustls-tls"),
+    feature = "with-tokio"
+    ),
+    tokio::test
+    ),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn streaming_big_gc_put_head_get_delete_object() {
         streaming_test_put_get_delete_big_object(test_gc_bucket()).await;
@@ -2477,12 +2484,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn streaming_big_minio_put_head_get_delete_object() {
         streaming_test_put_get_delete_big_object(test_minio_bucket()).await;
@@ -2495,6 +2502,7 @@ mod test {
         use async_std::stream::StreamExt;
         #[cfg(feature = "with-tokio")]
         use futures::StreamExt;
+
         use std::fs::File;
         use std::io::Write;
 
@@ -2515,25 +2523,13 @@ mod test {
         assert_eq!(code, 200);
         let mut writer = Vec::new();
         let code = bucket
-            .get_object_to_writer(remote_path, &mut writer)
+            .get_object_stream(remote_path, &mut writer)
             .await
             .unwrap();
         assert_eq!(code, 200);
         assert_eq!(content, writer);
         assert_eq!(content.len(), writer.len());
         assert_eq!(content.len(), 20_000_000);
-
-        #[cfg(any(feature = "with-tokio", feature = "with-async-std"))]
-        {
-            let mut response_data_stream = bucket.get_object_stream(remote_path).await.unwrap();
-
-            let mut bytes = vec![];
-
-            while let Some(chunk) = response_data_stream.bytes().next().await {
-                bytes.push(chunk)
-            }
-            assert_ne!(bytes.len(), 0);
-        }
 
         let response_data = bucket.delete_object(remote_path).await.unwrap();
         assert_eq!(response_data.status_code(), 204);
@@ -2542,12 +2538,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn streaming_aws_put_head_get_delete_object() {
         streaming_test_put_get_delete_small_object(test_aws_bucket()).await;
@@ -2555,19 +2551,19 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(
-            all(
-                not(feature = "sync"),
-                not(feature = "tokio-rustls-tls"),
-                feature = "with-tokio"
-            ),
-            tokio::test
-        ),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(
+    all(
+    not(feature = "sync"),
+    not(feature = "tokio-rustls-tls"),
+    feature = "with-tokio"
+    ),
+    tokio::test
+    ),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn streaming_gc_put_head_get_delete_object() {
         streaming_test_put_get_delete_small_object(test_gc_bucket()).await;
@@ -2575,12 +2571,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn streaming_r2_put_head_get_delete_object() {
         streaming_test_put_get_delete_small_object(test_r2_bucket()).await;
@@ -2588,12 +2584,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn streaming_minio_put_head_get_delete_object() {
         streaming_test_put_get_delete_small_object(test_minio_bucket()).await;
@@ -2613,7 +2609,7 @@ mod test {
         assert_eq!(code, 200);
         let mut writer = Vec::new();
         let code = bucket
-            .get_object_to_writer(remote_path, &mut writer)
+            .get_object_stream(remote_path, &mut writer)
             .await
             .unwrap();
         assert_eq!(code, 200);
@@ -2703,8 +2699,8 @@ mod test {
 
     #[ignore]
     #[cfg(all(
-        any(feature = "with-tokio", feature = "with-async-std"),
-        feature = "blocking"
+    any(feature = "with-tokio", feature = "with-async-std"),
+    feature = "blocking"
     ))]
     #[test]
     fn aws_put_head_get_delete_object_blocking() {
@@ -2713,8 +2709,8 @@ mod test {
 
     #[ignore]
     #[cfg(all(
-        any(feature = "with-tokio", feature = "with-async-std"),
-        feature = "blocking"
+    any(feature = "with-tokio", feature = "with-async-std"),
+    feature = "blocking"
     ))]
     #[test]
     fn gc_put_head_get_delete_object_blocking() {
@@ -2723,8 +2719,8 @@ mod test {
 
     #[ignore]
     #[cfg(all(
-        any(feature = "with-tokio", feature = "with-async-std"),
-        feature = "blocking"
+    any(feature = "with-tokio", feature = "with-async-std"),
+    feature = "blocking"
     ))]
     #[test]
     fn wasabi_put_head_get_delete_object_blocking() {
@@ -2733,8 +2729,8 @@ mod test {
 
     #[ignore]
     #[cfg(all(
-        any(feature = "with-tokio", feature = "with-async-std"),
-        feature = "blocking"
+    any(feature = "with-tokio", feature = "with-async-std"),
+    feature = "blocking"
     ))]
     #[test]
     fn minio_put_head_get_delete_object_blocking() {
@@ -2743,8 +2739,8 @@ mod test {
 
     #[ignore]
     #[cfg(all(
-        any(feature = "with-tokio", feature = "with-async-std"),
-        feature = "blocking"
+    any(feature = "with-tokio", feature = "with-async-std"),
+    feature = "blocking"
     ))]
     #[test]
     fn digital_ocean_put_head_get_delete_object_blocking() {
@@ -2753,12 +2749,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn aws_put_head_get_delete_object() {
         put_head_get_delete_object(test_aws_bucket(), true).await;
@@ -2766,18 +2762,18 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(
-            all(
-                not(any(feature = "sync", feature = "tokio-rustls-tls")),
-                feature = "with-tokio"
-            ),
-            tokio::test
-        ),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(
+    all(
+    not(any(feature = "sync", feature = "tokio-rustls-tls")),
+    feature = "with-tokio"
+    ),
+    tokio::test
+    ),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn gc_test_put_head_get_delete_object() {
         put_head_get_delete_object(test_gc_bucket(), true).await;
@@ -2785,12 +2781,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn wasabi_test_put_head_get_delete_object() {
         put_head_get_delete_object(test_wasabi_bucket(), true).await;
@@ -2798,12 +2794,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn minio_test_put_head_get_delete_object() {
         put_head_get_delete_object(test_minio_bucket(), true).await;
@@ -2825,12 +2821,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn r2_test_put_head_get_delete_object() {
         put_head_get_delete_object(test_r2_bucket(), false).await;
@@ -2877,12 +2873,12 @@ mod test {
     }
 
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     #[ignore]
     async fn test_bucket_create_delete_default_region() {
@@ -2893,8 +2889,8 @@ mod test {
             test_aws_credentials(),
             config,
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(&response.response_text, "");
 
@@ -2906,12 +2902,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn test_bucket_create_delete_non_default_region() {
         let config = BucketConfiguration::default();
@@ -2921,8 +2917,8 @@ mod test {
             test_aws_credentials(),
             config,
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(&response.response_text, "");
 
@@ -2934,12 +2930,12 @@ mod test {
 
     #[ignore]
     #[maybe_async::test(
-        feature = "sync",
-        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
-        async(
-            all(not(feature = "sync"), feature = "with-async-std"),
-            async_std::test
-        )
+    feature = "sync",
+    async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+    async(
+    all(not(feature = "sync"), feature = "with-async-std"),
+    async_std::test
+    )
     )]
     async fn test_bucket_create_delete_non_default_region_public() {
         let config = BucketConfiguration::public();
@@ -2949,8 +2945,8 @@ mod test {
             test_aws_credentials(),
             config,
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(&response.response_text, "");
 
@@ -2979,8 +2975,8 @@ mod test {
             "eu-central-1".parse().unwrap(),
             test_aws_credentials(),
         )
-        .unwrap()
-        .with_request_timeout(Duration::from_secs(10));
+            .unwrap()
+            .with_request_timeout(Duration::from_secs(10));
 
         assert_eq!(bucket.request_timeout(), Some(Duration::from_secs(10)));
     }
